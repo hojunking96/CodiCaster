@@ -12,6 +12,8 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import com.ll.codicaster.boundedContext.aws.s3.dto.AmazonS3ImageDto;
+import com.ll.codicaster.boundedContext.aws.s3.service.AmazonS3Service;
 import com.ll.codicaster.base.event.EventAfterWrite;
 
 import org.springframework.beans.factory.annotation.Value;
@@ -41,7 +43,7 @@ import lombok.RequiredArgsConstructor;
 @RequiredArgsConstructor
 @Transactional(readOnly = true)
 public class ArticleService {
-
+    private final AmazonS3Service amazonS3Service;
     private final ArticleRepository articleRepository;
     private final ImageRepository imageRepository;
     private final ApplicationEventPublisher publisher;
@@ -83,31 +85,25 @@ public class ArticleService {
 
         // 이미지 파일이 있으면 저장
         if (!imageFile.isEmpty()) {
-            UUID uuid = UUID.randomUUID();
-            String fileName = uuid + "_" + imageFile.getOriginalFilename();
-
-            File directory = new File(uploadDir);
-            // 디렉토리가 존재하지 않으면 생성
-            if (!directory.exists()) {
-                directory.mkdirs(); // 상위 디렉토리까지 모두 생성
-            }
-
-            File saveFile = new File(uploadDir, fileName);
             try {
-                imageFile.transferTo(saveFile);
+                // 이미지 업로드 및 URL 정보 받아오기
+                AmazonS3ImageDto amazonS3ImageDto = amazonS3Service.imageUpload(imageFile, UUID.randomUUID().toString());
+
+                // 이미지 정보를 설정하고 저장
+                Image image = Image.builder()
+                        .filename(imageFile.getOriginalFilename())
+                        .filepath(amazonS3ImageDto.getCdnUrl()) // CDN URL로 변경
+                        .article(article)
+                        .build();
+
+                image = imageRepository.save(image);  // 이미지를 DB에 저장
+
+                article.setImage(image); // 이미지 정보를 게시글에 추가
             } catch (Exception e) {
                 return RsData.of("F-4", "이미지 업로드에 실패하였습니다");
             }
-
-            Image image = Image.builder()
-                    .filename(fileName)
-                    .filepath("/images/" + fileName)
-                    .article(article)
-                    .build();
-
-            image = imageRepository.save(image);  // 이미지를 DB에 저장
-            article.setImage(image); // 이미지 정보를 게시글에 추가
         }
+
         return RsData.of("S-1", "성공적으로 저장되었습니다", article);
     }
 
@@ -288,11 +284,11 @@ public class ArticleService {
     public void truncateUserTagMap(Member member, Set<String> tagSet) {
         Map<String, Integer> tagMap = member.getTagMap();
 
-		//값이 0 이하일 때 예외처리 ? 필요한가 => 필요없을 듯, 큰 순서대로 사용할 예정
-		for (String tag : tagSet) {
-			tagMap.put(tag, tagMap.get(tag) - 1);
-		}
-	}
+        //값이 0 이하일 때 예외처리 ? 필요한가 => 필요없을 듯, 큰 순서대로 사용할 예정
+        for (String tag : tagSet) {
+            tagMap.put(tag, tagMap.get(tag) - 1);
+        }
+    }
 
     //나의 게시물 (페이징 처리중, 오버로딩)
     public Page<Article> showMyList(int page, int size) {
@@ -303,9 +299,9 @@ public class ArticleService {
     //나의 게시물 (리스트)
     public List<Article> showMyList() {
         return articleRepository.findByAuthorId(rq.getMember().getId())
-            .stream()
-            .sorted(Comparator.comparingLong(Article::getId).reversed())
-            .collect(Collectors.toList());
+                .stream()
+                .sorted(Comparator.comparingLong(Article::getId).reversed())
+                .collect(Collectors.toList());
     }
 
 
@@ -313,9 +309,9 @@ public class ArticleService {
     public List<Article> sortByAllParams(Member user, List<Article> articleList) {
 
         return articleList.stream()
-            .sorted(Comparator.comparingDouble(article -> calculateTotalScore((Article)article, user)).reversed())
-            .filter(article -> article.getAuthor().getGender().equals(user.getGender()))
-            .collect(Collectors.toList());
+                .sorted(Comparator.comparingDouble(article -> calculateTotalScore((Article) article, user)).reversed())
+                .filter(article -> article.getAuthor().getGender().equals(user.getGender()))
+                .collect(Collectors.toList());
     }
 
     //총 합계점수
@@ -414,8 +410,6 @@ public class ArticleService {
         int end = Math.min((start + pageable.getPageSize()), myArticles.size());
         return new PageImpl<>(myArticles.subList(start, end), pageable, myArticles.size());
     }
-
-
 
 
 }
